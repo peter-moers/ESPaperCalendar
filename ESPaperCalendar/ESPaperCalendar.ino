@@ -1,7 +1,9 @@
 /**
  * Rename Example.Credentials.h to Credentials.h and update with your wifi and calendar information
  **/
+
 #include "Credentials.h"
+#include "Configuration.h"
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -11,14 +13,22 @@
 #include <time.h>
 
 #include <HTTPClient.h>
-#include <GxEPD2_BW.h> // Include the GxEPD2 library
-#include <GxEPD2_3C.h> // Include the GxEPD2 color extension
 #include <Wire.h>
 #include <SPI.h>
 #include <GxEPD2_EPD.h>
+
+#ifdef SCREEN_BW
+  #include <GxEPD2_BW.h> // Include the GxEPD2 library for black and white
+#endif
+#ifdef SCREEN_3C
+  #include <GxEPD2_3C.h> // Include the GxEPD2 color extension (if needed later)
+#endif
+
 #include <Fonts/FreeSans9pt7b.h>
 #include <Fonts/FreeSansBold9pt7b.h>
-#include <Fonts/FreeSansBold18pt7b.h>
+#if defined(SCREEN_SIZE_7_5)
+  #include <Fonts/FreeSansBold18pt7b.h>
+#endif
 
 // Display pins, change to match your coonfig/board if required
 #define RST_PIN 16
@@ -26,32 +36,59 @@
 #define CS_PIN 5
 #define BUSY_PIN 4
 
+#define LED_BUILTIN 2
 
-bool ribbaFrame = true; /* make it fit in a Ikea Ribba frame*/
+//bool ribbaFrame = true; /* make it fit in a Ikea Ribba frame*/
 bool keepAwake = false; /* usefull while testing */
+bool ribbaFrame = false; /* make it fit in a Ikea Ribba frame*/
 
 WiFiUDP ntpUDP;
 
 // NTP Server configuration
 NTPClient timeClient(ntpUDP, "pool.ntp.org", 0);
 
-// Define TimeChangeRule objects for DST start and end
-TimeChangeRule myDSTStart = {"CEST", Last, Sun, Mar, 2, 120};  // Central European Summer Time (UTC +2), last Sunday in March at 2:00
-TimeChangeRule myDSTEnd = {"CET", Last, Sun, Oct, 2, 60};    // Central European Time (UTC +1), last Sunday in October at 2:00
-
+#if defined(LANG_FR)
+  // Define TimeChangeRule objects for DST start and end
+  TimeChangeRule myDSTStart = {"CEST", Last, Sun, Mar, 2, 120};  // Central European Summer Time (UTC +2), last Sunday in March at 2:00
+  TimeChangeRule myDSTEnd = {"CET", Last, Sun, Oct, 2, 60};    // Central European Time (UTC +1), last Sunday in October at 2:00
+#elif defined(LANG_NL)
+  // Define TimeChangeRule objects for DST start and end
+  TimeChangeRule myDSTStart = {"CEST", Last, Sun, Mar, 2, 120};  // Central European Summer Time (UTC +2), last Sunday in March at 2:00
+  TimeChangeRule myDSTEnd = {"CET", Last, Sun, Oct, 2, 60};    // Central European Time (UTC +1), last Sunday in October at 2:00
+#elif defined(LANG_EN)
+  TimeChangeRule myDSTStart = {"CEST", Last, Sun, Mar, 2, 60};  // Central European Summer Time (UTC +1), last Sunday in March at 2:00
+  TimeChangeRule myDSTEnd = {"CET", Last, Sun, Oct, 2, 0};    // Central European Time (UTC), last Sunday in October at 2:00
+#else
+  #warning "Select Language."
+#endif
 // Create a Timezone object to handle time zone and DST settings
 Timezone myTimezone(myDSTStart, myDSTEnd);
 
+
 // Month and day names, translate if you want
-String weekdagen[]={"MAANDAG","DINSDAG","WOENSDAG","DONDERDAG","VRIJDAG","ZATERDAG","ZONDAG"};
-String weekdagenKort[]={"MA","DI","WO","DO","VR","ZA","ZO"};
-String maanden[]={"JANUARI","FEBRUARI","MAART","APRIL","MEI","JUNI","JULI","AUGUSTUS","SEPTEMBER","OKTOBER","NOVEMBER","DECEMBER"};
+#if defined(LANG_EN)
+  String weekdagen[]={"MONDAY","TUESDAY","WEDNESDAY","THURSDAY","FRIDAY","SATURDAY","SUNDAY"};
+  String weekdagenKort[]={"MO","TU","WE","TH","FR","SA","SU"};
+  String maanden[]={"JANUARY","FEBRUARY","MARCH","APRIL","MAY","JUNE","JULY","AUGUST","SEPTEMBER","OCTOBER","NOVEMBER","DECEMBER"};
+#elif defined(LANG_NL)
+  String weekdagen[]={"MAANDAG","DINSDAG","WOENSDAG","DONDERDAG","VRIJDAG","ZATERDAG","ZONDAG"};
+  String weekdagenKort[]={"MA","DI","WO","DO","VR","ZA","ZO"};
+  String maanden[]={"JANUARI","FEBRUARI","MAART","APRIL","MEI","JUNI","JULI","AUGUSTUS","SEPTEMBER","OKTOBER","NOVEMBER","DECEMBER"};
+#elif defined(LANG_FR)
+  String weekdagen[]={"LUNDI","MARDI","MERCREDI","JEUDI","VENDREDI","SAMEDI","DIMANCHE"};
+  String weekdagenKort[]={"LU","MA","ME","JE","VE","SA","DI"};
+  String maanden[]={"JANVIER","FEVRIER","MARS","AVRIL","MAI","JUIN","JUILLET","AOUT","SEPTEMBRE","OCTOBRE","NOVEMBRE","DECEMBRE"};
+#else
+  #warning "Select a language."
+#endif
+
 
 //Tijd variabelen
 unsigned long currentTimestamp;
-int dayOfWeek;
-int currentMonth;
-int currentHour;
+short dayOfWeek;
+short currentMonth;
+short currentHour;
+short currentYear;
 
 const int httpsPort = 443;
 WiFiClientSecure client;
@@ -62,8 +99,20 @@ struct Event {
   unsigned long startDate;
   bool isAllDay;
 };
+#if defined(SCREEN_SIZE_7_5) && defined(SCREEN_3C)
+  // 7.5" for 3-color
+  GxEPD2_3C<GxEPD2_750c_Z08, GxEPD2_750c_Z08::HEIGHT / 4> display(GxEPD2_750c_Z08(/*CS=15*/ CS_PIN, /*DC=4*/ DC_PIN, /*RST=5*/ RST_PIN, /*BUSY=16*/ BUSY_PIN));
+#elif defined(SCREEN_SIZE_7_5) && defined(SCREEN_BW)
+  // 7.5" mono-chrome
+  GxEPD2_3C<GxEPD2_750c_Z08, GxEPD2_750_Z08::HEIGHT / 4> display(GxEPD2_750c_Z08(/*CS=15*/ CS_PIN, /*DC=4*/ DC_PIN, /*RST=5*/ RST_PIN, /*BUSY=16*/ BUSY_PIN));
+#elif defined(SCREEN_SIZE_4_2) && defined(SCREEN_3C)
+  // 4.2" for 3-color:
+  GxEPD2_3C<GxEPD2_420c, GxEPD2_420c::HEIGHT / 8> display(GxEPD2_420c(CS_PIN, DC_PIN, RST_PIN, BUSY_PIN));
+#elif defined(SCREEN_SIZE_4_2) && defined(SCREEN_BW)
+  // 4.2" mono-chrome
+  GxEPD2_BW<GxEPD2_420, GxEPD2_420::HEIGHT / 8> display(GxEPD2_420(CS_PIN, DC_PIN, RST_PIN, BUSY_PIN));
+#endif
 
-GxEPD2_3C<GxEPD2_750c_Z08, GxEPD2_750c_Z08::HEIGHT / 4> display(GxEPD2_750c_Z08(/*CS=15*/ CS_PIN, /*DC=4*/ DC_PIN, /*RST=5*/ RST_PIN, /*BUSY=16*/ BUSY_PIN));
 
 Event events[100]; // Adjust the size as needed (but be careful, to big and it crashes)
 int eventCount = 0;
@@ -79,6 +128,54 @@ int currentDay;
 RTC_DATA_ATTR int wakeupCount = -1;
 esp_sleep_wakeup_cause_t wakeup_reason;
 
+struct AccentMapping {
+    unsigned short utf8Code;
+    char asciiChar;
+};
+
+AccentMapping accentMap[] = {
+    {0xC3A0, 'a'}, {0xC3A1, 'a'}, {0xC3A2, 'a'}, {0xC3A3, 'a'}, {0xC3A4, 'a'}, {0xC3A5, 'a'}, // à, á, â, ã, ä, å
+    {0xC3A7, 'c'}, // ç
+    {0xC3A8, 'e'}, {0xC3A9, 'e'}, {0xC3AA, 'e'}, {0xC3AB, 'e'}, // è, é, ê, ë
+    {0xC3AC, 'i'}, {0xC3AD, 'i'}, {0xC3AE, 'i'}, {0xC3AF, 'i'}, // ì, í, î, ï
+    {0xC3B2, 'o'}, {0xC3B3, 'o'}, {0xC3B4, 'o'}, {0xC3B6, 'o'}, // ò, ó, ô, ö
+    {0xC3B9, 'u'}, {0xC3BA, 'u'}, {0xC3BB, 'u'}, {0xC3BC, 'u'}, // ù, ú, û, ü
+    {0xC3B1, 'n'}, // ñ
+    {0xC3B5, 'y'}, // ý
+    {0xC4A0, 'a'}, {0xC4A1, 'a'}, {0xC4A2, 'a'}, {0xC4A3, 'a'}, // Ā, ā, Ą, ą
+    {0xC4B2, 'c'}, {0xC4B3, 'c'}, {0xC4B6, 'c'}, {0xC4B7, 'c'}, // Ć, ć, Č, č
+    {0xC490, 'd'}, {0xC491, 'd'}, // Đ, đ
+    {0xC498, 'e'}, {0xC499, 'e'}, {0xC49A, 'e'}, {0xC49B, 'e'}, {0xC49C, 'e'}, {0xC49D, 'e'}, // Ē, ē, Ė, ė, Ę, ę
+    {0xC4A8, 'i'}, {0xC4A9, 'i'}, {0xC4AA, 'i'}, {0xC4AB, 'i'}, {0xC4AC, 'i'}, {0xC4AD, 'i'}, // Ī, ī, Į, į, İ, ı
+    {0xC581, 'o'}, {0xC582, 'o'}, {0xC583, 'o'}, // Ő, ő, Ǫ, ǫ
+    {0xC5A0, 'r'}, {0xC5A1, 'r'}, // Ŕ, ŕ
+    {0xC590, 's'}, {0xC591, 's'}, {0xC592, 's'}, {0xC593, 's'}, // Ś, ś, Ş, ş
+    {0xC5A4, 't'}, {0xC5A5, 't'}, {0xC5A6, 't'}, {0xC5A7, 't'}, // Ť, ť, Ţ, ţ
+    {0xC5AA, 'u'}, {0xC5AB, 'u'}, {0xC5AC, 'u'}, {0xC5AD, 'u'}, {0xC5AE, 'u'}, {0xC5AF, 'u'}, // Ū, ū, Ů, ů, Ű, ű
+    {0xC5B2, 'z'}, {0xC5B3, 'z'}, {0xC5B4, 'z'}, {0xC5B5, 'z'}, // Ź, ź, Ż, ż
+};
+String stripAccents(String s) {
+    String result = "";
+    for (int i = 0; i < s.length(); i++) {
+        unsigned char c = s.charAt(i);
+
+        if (c < 128) { // ASCII standard
+            result += (char)c;
+        } else if (c < 2048) { // UTF-8 sur 2 octets
+            unsigned char c2 = s.charAt(++i);
+            unsigned short utf8Code = (c << 8) | c2; // Combine les deux octets en un short
+
+            for (const auto& mapping : accentMap) {
+                if (mapping.utf8Code == utf8Code) {
+                    result += mapping.asciiChar;
+                    break; // Important : sortir de la boucle une fois trouvé
+                }
+            }
+        } // ... (gestion des 3 et 4 octets si nécessaire)
+    }
+    return result;
+}
+
 /**
  * Everything happens in setup()
  */
@@ -92,7 +189,7 @@ void setup() {
   if (wakeup_reason==ESP_SLEEP_WAKEUP_TIMER ) {
     --wakeupCount;
     if(wakeupCount>0) { //keep sleeping
-      Serial.println("Nog " + String(wakeupCount) + " uur te gaan. Verder slapen...");
+      Serial.println("Encore " + String(wakeupCount) + ". Continuez à dormir...");
       startDeepSleep();
     }
   }
@@ -191,6 +288,7 @@ void getNetworkTime() {
   dayOfWeek = (timeInfo->tm_wday + 6) % 7;
   currentMonth = timeInfo->tm_mon;
   currentHour = timeInfo->tm_hour;
+  currentYear = timeInfo->tm_year;
   currentDay = currentTimestamp / 86400;
 }
 
@@ -568,7 +666,7 @@ void updateDisplay() {
   digitalWrite(LED_BUILTIN, HIGH);
   delay(500); 
   digitalWrite(LED_BUILTIN, LOW);
-  display.setRotation(0);
+  display.setRotation(1);
   display.setFullWindow();
   display.firstPage();
 
@@ -587,120 +685,183 @@ void updateDisplay() {
       topOffset = 15;
     }
 
-    // Current day
-    display.fillRect(20 + leftOffset, 10 + topOffset, 280, 60, GxEPD_RED);
-    display.drawRect(20 + leftOffset, 10 + topOffset, 280, 120, GxEPD_RED);
-    display.setTextColor(GxEPD_WHITE);
-    display.setFont(&FreeSansBold18pt7b);
-    drawCentreString(weekdagen[dayOfWeek],160+leftOffset,39 + topOffset);
+    #if defined(SCREEN_SIZE_7_5)
+      // Current day
+      display.fillRect(20 + leftOffset, 10 + topOffset, 280, 60, GxEPD_RED);
+      display.drawRect(20 + leftOffset, 10 + topOffset, 280, 120, GxEPD_RED);
+      display.setTextColor(GxEPD_WHITE);
+      display.setFont(&FreeSansBold18pt7b);
+      drawCentreString(weekdagen[dayOfWeek],160+leftOffset,39 + topOffset);
 
-    display.setTextColor(GxEPD_RED);
-    drawCentreString(String(currentDayOfMonth) + " " + maanden[currentMonth],160 + leftOffset,97 + topOffset);
-
-
-    // Vertical line between calendar and events
-    if(ribbaFrame) {
-      display.fillRect(360, 0, 2, 480, GxEPD_RED);
-    } else {
-      display.fillRect(340, 0, 2, 480, GxEPD_RED);
-    }
-    display.setTextColor(GxEPD_BLACK);
-    display.setFont(&FreeSansBold9pt7b);
-
-    // Weekdays on calendar
-    for(int i=0;i<7;i++) {
-      drawCentreString(weekdagenKort[i],leftOffset + 40 + i*40,170);
-    }
-  
-    display.setTextColor(GxEPD_BLACK);
-    display.setFont(&FreeSansBold9pt7b);
-
-    // Draw circles for each day
-    for (int i = 0; i < 29; i++) {
-        int x = leftOffset + 40 + ((i+dayOfWeek) % 7) * 40;
-        int y = topOffset + 210 + ((i+dayOfWeek) / 7) * 40;
+      display.setTextColor(GxEPD_RED);
+      drawCentreString(String(currentDayOfMonth) + " " + maanden[currentMonth],160 + leftOffset,97 + topOffset);
 
 
-        // Border color
-        if (hasEvent(i)) { // Check if there's an event on this day
-            display.fillCircle(x, y, 15, GxEPD_RED);
-        } else {
-            //display.fillCircle(x, y, 15, GxEPD_BLACK);
-        }
-
-        // Fill color
-        if(hasAllDayEvent(i)) { // All day event
-            display.fillCircle(x, y, 15, GxEPD_RED);
-            display.setTextColor(GxEPD_WHITE);
-        } else {
-            display.fillCircle(x, y, 13, GxEPD_WHITE);
-            display.setTextColor(GxEPD_BLACK);
-        }
-        
-        // Extra calendar
-        if(second_calendar && hasExtraEvent(i)) {
-            display.fillCircle(x+12, y+12, 5, GxEPD_RED);
-        }
-
-        currentCircleDay = getDayOfMonth(currentTimestamp + i*86400);
-        if (currentCircleDay<10) {
-          display.setCursor(x - 6, y + 5);
-        } else {
-          display.setCursor(x - 10, y + 5);
-        }
-        display.print(currentCircleDay);
-    }
-    
-    
-    // Print the sorted events
-    display.setTextColor(GxEPD_BLACK);
-    for (int i = 0; i < eventCount && i < 8; i++) {
-      Serial.println(String(i) + " Event: " + events[i].summary + ", Start Date: " + formatEpochTime(events[i].startDate));
-      display.setCursor(400, i*55 + 40);
+      // Vertical line between calendar and events
+      if(ribbaFrame) {
+        display.fillRect(360, 0, 2, 480, GxEPD_RED);
+      } else {
+        display.fillRect(340, 0, 2, 480, GxEPD_RED);
+      }
+      display.setTextColor(GxEPD_BLACK);
       display.setFont(&FreeSansBold9pt7b);
 
-      if(events[i].isAllDay) {
-        display.print(formatEpochDate(events[i].startDate));
-      } else {
-        display.print(formatEpochTime(events[i].startDate));
+      // Weekdays on calendar
+      for(int i=0;i<7;i++) {
+        drawCentreString(weekdagenKort[i],leftOffset + 40 + i*40,170);
       }
-      display.setCursor(400, i*55 + 60);
-      display.setFont(&FreeSans9pt7b);
-      display.print(events[i].summary);
-      if(events[i].isAllDay) {
-        display.fillRect(390, i*55+25, 2, 40, GxEPD_BLACK);
-      }
-    }
     
-
-    // Last update information
-    // display.setCursor(400, 8*55 + 30);
-    // display.print("Laatste update: " + formatEpochTime(currentTimestamp));       
-    
-
-    // info bezetting bnb
-    if(second_calendar) {
       display.setTextColor(GxEPD_BLACK);
-      display.setCursor(leftOffset + 30, 420);
-      display.setFont(&FreeSans9pt7b);
-      if(hasExtraEvent(0)) {
-        display.print("BnB is bezet vandaag");
-        if(!hasExtraEvent(1)) {
-          display.setCursor(leftOffset + 30, 445);
-          display.setFont(&FreeSans9pt7b);;
-          display.print("Gasten vertrekken morgen");
+      display.setFont(&FreeSansBold9pt7b);
+
+      // Draw circles for each day
+      for (int i = 0; i < 29; i++) {
+          int x = leftOffset + 40 + ((i+dayOfWeek) % 7) * 40;
+          int y = topOffset + 210 + ((i+dayOfWeek) / 7) * 40;
+
+
+          // Border color
+          if (hasEvent(i)) { // Check if there's an event on this day
+              display.fillCircle(x, y, 15, GxEPD_RED);
+          } else {
+              //display.fillCircle(x, y, 15, GxEPD_BLACK);
+          }
+
+          // Fill color
+          if(hasAllDayEvent(i)) { // All day event
+              display.fillCircle(x, y, 15, GxEPD_RED);
+              display.setTextColor(GxEPD_WHITE);
+          } else {
+              display.fillCircle(x, y, 13, GxEPD_WHITE);
+              display.setTextColor(GxEPD_BLACK);
+          }
+          
+          // Extra calendar
+          if(second_calendar && hasExtraEvent(i)) {
+              display.fillCircle(x+12, y+12, 5, GxEPD_RED);
+          }
+
+          currentCircleDay = getDayOfMonth(currentTimestamp + i*86400);
+          if (currentCircleDay<10) {
+            display.setCursor(x - 6, y + 5);
+          } else {
+            display.setCursor(x - 10, y + 5);
+          }
+          display.print(currentCircleDay);
+      }
+      
+      
+      // Print the sorted events
+      display.setTextColor(GxEPD_BLACK);
+      for (int i = 0; i < eventCount && i < 8; i++) {
+        Serial.println(String(i) + " Event: " + events[i].summary + ", Start Date: " + formatEpochTime(events[i].startDate));
+        display.setCursor(400, i*55 + 40);
+        display.setFont(&FreeSansBold9pt7b);
+
+        if(events[i].isAllDay) {
+          display.print(formatEpochDate(events[i].startDate));
+        } else {
+          display.print(formatEpochTime(events[i].startDate));
         }
-      } else {
-        display.print("BnB is vrij vandaag");
-        if(hasExtraEvent(1)) {
-          display.setCursor(leftOffset + 30, 445);
-          display.setFont(&FreeSans9pt7b);
-          display.setTextColor(GxEPD_RED);
-          display.print("Gasten komen morgen aan");
+        display.setCursor(400, i*55 + 60);
+        display.setFont(&FreeSans9pt7b);
+        display.print(stripAccents(events[i].summary));
+        if(events[i].isAllDay) {
+          display.fillRect(390, i*55+25, 2, 40, GxEPD_BLACK);
         }
       }
-    }
+      
 
+      // Last update information
+      // display.setCursor(400, 8*55 + 30);
+      // display.print("Laatste update: " + formatEpochTime(currentTimestamp));       
+      
+
+      // info bezetting bnb
+      if(second_calendar) {
+        display.setTextColor(GxEPD_BLACK);
+        display.setCursor(leftOffset + 30, 420);
+        display.setFont(&FreeSans9pt7b);
+        if(hasExtraEvent(0)) {
+          display.print("BnB is bezet vandaag");
+          if(!hasExtraEvent(1)) {
+            display.setCursor(leftOffset + 30, 445);
+            display.setFont(&FreeSans9pt7b);;
+            display.print("Gasten vertrekken morgen");
+          }
+        } else {
+          display.print("BnB is vrij vandaag");
+          if(hasExtraEvent(1)) {
+            display.setCursor(leftOffset + 30, 445);
+            display.setFont(&FreeSans9pt7b);
+            display.setTextColor(GxEPD_RED);
+            display.print("Gasten komen morgen aan");
+          }
+        }
+      }
+
+    #elif defined(SCREEN_SIZE_4_2)
+
+      // Current day
+      display.fillRect(0 + leftOffset, topOffset, 300, 30, GxEPD_RED);
+      display.setTextColor(GxEPD_WHITE);
+      display.setFont(&FreeSansBold9pt7b);
+      //drawCentreString(weekdagen[dayOfWeek],70+leftOffset,15 + topOffset);
+      drawCentreString(weekdagen[dayOfWeek] + " " + String(currentDayOfMonth) + " " + maanden[currentMonth] + " " + String(currentYear - 100 + 2000),150+leftOffset,5+topOffset);
+
+      // Print the sorted events
+      display.setTextColor(GxEPD_BLACK);
+      for (int i = 0; i < eventCount && i < 8; i++) {
+        Serial.println(String(i) + " Event: " + events[i].summary + ", Start Date: " + formatEpochTime(events[i].startDate));
+        display.setCursor(400, i*65 + 30);
+        display.setFont(&FreeSansBold9pt7b);
+
+        if(events[i].isAllDay) {
+          display.print(formatEpochDate(events[i].startDate));
+          //display.fillRect(190, i*65 + 70, 20, 10, GxEPD_BLACK);
+        } else {
+          display.print(formatEpochTime(events[i].startDate));
+        }
+        display.setCursor(400, i*65 + 50);
+        display.setFont(&FreeSans9pt7b);
+        
+        display.print(stripAccents(events[i].summary));
+        
+        display.fillRect(15, i*65 + 100, 270, 2, GxEPD_RED);
+      }
+      
+
+      // Last update information
+      // display.setCursor(400, 8*55 + 30);
+      // display.print("Laatste update: " + formatEpochTime(currentTimestamp));       
+      
+
+      // info bezetting bnb
+      if(second_calendar) {
+        display.setTextColor(GxEPD_BLACK);
+        display.setCursor(leftOffset + 30, 420);
+        display.setFont(&FreeSans9pt7b);
+        if(hasExtraEvent(0)) {
+          display.print("BnB is bezet vandaag");
+          if(!hasExtraEvent(1)) {
+            display.setCursor(leftOffset + 30, 445);
+            display.setFont(&FreeSans9pt7b);;
+            display.print("Gasten vertrekken morgen");
+          }
+        } else {
+          display.print("BnB is vrij vandaag");
+          if(hasExtraEvent(1)) {
+            display.setCursor(leftOffset + 30, 445);
+            display.setFont(&FreeSans9pt7b);
+            display.setTextColor(GxEPD_RED);
+            display.print("Gasten komen morgen aan");
+          }
+        }
+      }
+
+    #else
+      #error "No configuration SCREEN_SIZE_X_X."
+    #endif
 
     Serial.println("setup do"); 
   }
